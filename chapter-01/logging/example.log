@@ -1,0 +1,7 @@
+2022-03-20 17:21:40,886 - root - INFO - Store input numbers
+2022-03-20 17:21:43,758 - root - DEBUG - First number entered: 1
+2022-03-20 17:21:43,758 - root - DEBUG - Second number entered: 2
+2022-03-20 17:21:43,758 - root - INFO - Add two numbers
+2022-03-20 17:21:43,758 - root - DEBUG - Sum of the two numbers: 3
+2022-03-20 17:21:43,759 - root - INFO - Displaying the sum
+2022-03-20 17:21:43,759 - root - DEBUG - Rendered message: The sum of 1 and 2 is 3.0

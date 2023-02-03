@@ -1,0 +1,1 @@
+docker run -p 8080:5000 -e OTEL_LOG_LEVEL='debug' aws-otel-flask-application
