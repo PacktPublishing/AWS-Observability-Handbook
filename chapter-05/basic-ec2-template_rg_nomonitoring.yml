@@ -1,0 +1,693 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  AWS CloudFormation Insider's Guide to Observability on AWS sample template: Create
+  an Amazon EC2 instance running the Amazon Linux AMI. The AMI is chosen based
+  on the region in which the stack is run. This example creates an EC2 security
+  group for the instance to give you SSH access. **WARNING** This template
+  creates an Amazon EC2 instance. You will be billed for the AWS resources used
+  if you create a stack from this template.
+Parameters:
+  ProjectZipFile:
+    Type: String
+    Default: java-scorekeep-src.zip
+  emailAddress:
+    Type: String
+    Default: UPDATEME
+  InstanceType:
+    Description: Server EC2 instance type
+    Type: String
+    Default: t2.small
+    AllowedValues:
+      - t1.micro
+      - t2.nano
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+      - m1.small
+      - m1.medium
+      - m1.large
+      - m1.xlarge
+      - m2.xlarge
+      - m2.2xlarge
+      - m2.4xlarge
+      - m3.medium
+    ConstraintDescription: must be a valid EC2 instance type.
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+  SGLocation:
+    Description: The IP address range that can be used to access the EC2 instances
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: 0.0.0.0/0
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+  DBInstanceID:
+    Default: mydbinstance
+    Description: My database instance
+    Type: String
+    MinLength: '1'
+    MaxLength: '63'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: >-
+      Must begin with a letter and must not end with a hyphen or contain two
+      consecutive hyphens.
+  DBInstanceClass:
+    Default: db.m5.large
+    Description: DB instance class
+    Type: String
+    ConstraintDescription: Must select a valid DB instance type.
+  DBAllocatedStorage:
+    Default: '20'
+    Description: The size of the database (GiB)
+    Type: Number
+    MinValue: '20'
+    MaxValue: '65536'
+    ConstraintDescription: must be between 20 and 65536 GiB.
+  DBUsername:
+    NoEcho: 'true'
+    Description: Username for MySQL database access
+    Default: 'myuser'
+    Type: String
+    MinLength: '1'
+    MaxLength: '16'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
+  DBPassword:
+    NoEcho: 'true'
+    Description: Password MySQL database access
+    Default: 'mypassword'
+    Type: String
+    MinLength: '8'
+    MaxLength: '41'
+    AllowedPattern: '[a-zA-Z0-9]*'
+    ConstraintDescription: must contain only alphanumeric characters.
+Resources:
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Open database for access
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 5432
+        ToPort: 5432
+        SourceSecurityGroupName:
+          Ref: InstanceSecurityGroup
+  MyDB:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      DBInstanceIdentifier: !Ref DBInstanceID
+      DBName: "ebdb"
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      Engine: postgres
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      VPCSecurityGroups:
+      - !GetAtt DBSecurityGroup.GroupId
+  LambdaZipsBucket:
+    Type: AWS::S3::Bucket
+  CopyZips:
+    Type: Custom::CopyZips
+    Properties:
+      ServiceToken: !GetAtt 'CopyZipsFunction.Arn'
+      DestBucket: !Ref 'LambdaZipsBucket'
+      SourceBucket: 'insiders-guide-observability-on-aws-book'
+      Prefix: 'chapter-04/'
+      Objects:
+        - random-name-lambda.zip
+  CopyZipsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Path: /
+      Policies:
+        - PolicyName: lambda-copier
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub 'arn:aws:s3:::insiders-guide-observability-on-aws-book/chapter-04/*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub 'arn:aws:s3:::${LambdaZipsBucket}/chapter-04/*'
+  CopyZipsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Copies objects from a source S3 bucket to a destination
+      Handler: index.handler
+      Runtime: python3.9
+      Role: !GetAtt 'CopyZipsRole.Arn'
+      Timeout: 240
+      Code:
+        ZipFile: |
+          import json
+          import logging
+          import threading
+          import boto3
+          import cfnresponse
+          def copy_objects(source_bucket, dest_bucket, prefix, objects):
+              s3 = boto3.client('s3')
+              for o in objects:
+                  key = prefix + o
+                  copy_source = {
+                      'Bucket': source_bucket,
+                      'Key': key
+                  }
+                  print('copy_source: %s' % copy_source)
+                  print('dest_bucket = %s'%dest_bucket)
+                  print('key = %s' %key)
+                  s3.copy_object(CopySource=copy_source, Bucket=dest_bucket,
+                        Key=key)
+          def delete_objects(bucket, prefix, objects):
+              s3 = boto3.client('s3')
+              objects = {'Objects': [{'Key': prefix + o} for o in objects]}
+              s3.delete_objects(Bucket=bucket, Delete=objects)
+          def timeout(event, context):
+              logging.error('Execution is about to time out, sending failure response to CloudFormation')
+              cfnresponse.send(event, context, cfnresponse.FAILED, {}, None)
+          def handler(event, context):
+              # make sure we send a failure to CloudFormation if the function
+              # is going to timeout
+              timer = threading.Timer((context.get_remaining_time_in_millis()
+                        / 1000.00) - 0.5, timeout, args=[event, context])
+              timer.start()
+              print('Received event: %s' % json.dumps(event))
+              status = cfnresponse.SUCCESS
+              try:
+                  source_bucket = event['ResourceProperties']['SourceBucket']
+                  dest_bucket = event['ResourceProperties']['DestBucket']
+                  prefix = event['ResourceProperties']['Prefix']
+                  objects = event['ResourceProperties']['Objects']
+                  if event['RequestType'] == 'Delete':
+                      delete_objects(dest_bucket, prefix, objects)
+                  else:
+                      copy_objects(source_bucket, dest_bucket, prefix, objects)
+              except Exception as e:
+                  logging.error('Exception: %s' % e, exc_info=True)
+                  status = cfnresponse.FAILED
+              finally:
+                  timer.cancel()
+                  cfnresponse.send(event, context, status, {}, None)
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
+        - arn:aws:iam::aws:policy/AmazonSNSFullAccess
+  RandomNameFunction:
+    DependsOn: CopyZips
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: random-name
+      Handler: index.handler
+      Runtime: nodejs14.x
+      Role: !GetAtt 'FunctionRole.Arn'
+      Code:
+        S3Bucket: !Ref 'LambdaZipsBucket'
+        S3Key: !Sub 'chapter-04/random-name-lambda.zip'
+      Description: Generate random names
+      Timeout: 10
+      TracingConfig:
+        Mode: Active
+      Environment:
+        Variables:
+          TOPIC_ARN: !Ref notificationTopic
+  EC2Instance:
+    Type: 'AWS::EC2::Instance'
+    Metadata:
+      'AWS::CloudFormation::Init':
+        configSets:
+          app_install:
+            - install_cfn
+            - yum_config
+            - install_deps
+#            - config-amazon-cloudwatch-agent
+#            - restart-amazon-cloudwatch-agent
+        install_cfn:
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content: !Join 
+                - ''
+                - - |
+                    [main]
+                  - stack=
+                  - !Ref 'AWS::StackId'
+                  - |+
+
+                  - region=
+                  - !Ref 'AWS::Region'
+                  - |+
+
+              mode: '000400'
+              owner: root
+              group: root
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Join 
+                - ''
+                - - |
+                    [cfn-auto-reloader-hook]
+                  - |
+                    triggers=post.update
+                  - |
+                    path=Resources.EC2Instance.Metadata.AWS::CloudFormation::Init
+                  - 'action=/opt/aws/bin/cfn-init -v '
+                  - '         --stack '
+                  - !Ref 'AWS::StackName'
+                  - '         --resource EC2Instance '
+                  - '         --configsets app_install '
+                  - '         --region '
+                  - !Ref 'AWS::Region'
+                  - |+
+
+              mode: '000400'
+              owner: root
+              group: root
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                  - /etc/cfn/cfn-hup.conf
+                  - /etc/cfn/hooks.d/cfn-auto-reloader.conf
+        yum_config:
+          commands:
+            enable_correto:
+              command: amazon-linux-extras enable corretto8 nginx1 -y
+#        config-amazon-cloudwatch-agent:
+#          files:
+#            "/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json":
+#              content: |
+#                {
+#                  "agent": {
+#                    "metrics_collection_interval": 10,
+#                    "logfile": "/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log"
+#                  },
+#                  "metrics": {
+#                    "namespace": "ScoreKeep",
+#                    "metrics_collected": {
+#                      "cpu": {
+#                        "resources": [
+#                          "*"
+#                        ],
+#                        "measurement": [
+#                          {"name": "cpu_usage_idle", "rename": "CPU_USAGE_IDLE", "unit": "Percent"},
+#                          {"name": "cpu_usage_nice", "unit": "Percent"},
+#                          "cpu_usage_guest"
+#                       ],
+#                       "totalcpu": false,
+#                       "metrics_collection_interval": 10
+#                     },
+#                     "disk": {
+#                       "resources": [
+#                         "/",
+#                         "/tmp"
+#                       ],
+#                       "measurement": [
+#                         {"name": "free", "rename": "DISK_FREE", "unit": "Gigabytes"},
+#                         "total",
+#                         "used"
+#                       ],
+#                       "ignore_file_system_types": [
+#                         "sysfs", "devtmpfs"
+#                       ],
+#                       "metrics_collection_interval": 60
+#                     },
+#                     "diskio": {
+#                       "resources": [
+#                         "*"
+#                       ],
+#                       "measurement": [
+#                         "reads",
+#                         "writes",
+#                         "read_time",
+#                         "write_time",
+#                         "io_time"
+#                       ],
+#                       "metrics_collection_interval": 60
+#                     },
+#                     "swap": {
+#                       "measurement": [
+#                         "swap_used",
+#                         "swap_free",
+#                         "swap_used_percent"
+#                       ]
+#                     },
+#                     "mem": {
+#                       "measurement": [
+#                         "mem_used",
+#                         "mem_cached",
+#                         "mem_total"
+#                       ],
+#                       "metrics_collection_interval": 1
+#                     },
+#                     "net": {
+#                       "resources": [
+#                         "eth0"
+#                       ],
+#                       "measurement": [
+#                         "bytes_sent",
+#                         "bytes_recv",
+#                         "drop_in",
+#                         "drop_out"
+#                       ]
+#                     },
+#                     "netstat": {
+#                       "measurement": [
+#                         "tcp_established",
+#                         "tcp_syn_sent",
+#                         "tcp_close"
+#                       ],
+#                       "metrics_collection_interval": 60
+#                     },
+#                     "processes": {
+#                       "measurement": [
+#                         "running",
+#                         "sleeping",
+#                         "dead"
+#                       ]
+#                     }
+#                   },
+#                   "append_dimensions": {
+#                     "ImageId": "${aws:ImageId}",
+#                     "InstanceId": "${aws:InstanceId}",
+#                     "InstanceType": "${aws:InstanceType}",
+#                     "AutoScalingGroupName": "${aws:AutoScalingGroupName}"
+#                   },
+#                   "aggregation_dimensions" : [["ImageId"], ["InstanceId", "InstanceType"], ["d1"],[]],
+#                   "force_flush_interval" : 30
+#                 },
+#                 "logs": {
+#                   "metrics_collected": {
+#                     "emf": {}
+#                   },
+#                   "logs_collected": {
+#                     "files": {
+#                       "collect_list": [
+#                         {
+#                           "file_path": "/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log",
+#                           "log_group_name": "amazon-cloudwatch-agent.log",
+#                           "log_stream_name": "amazon-cloudwatch-agent.log",
+#                           "timezone": "Local"
+#                         },
+#                         {
+#                           "file_path": "/tmp/scorekeep.log",
+#                           "log_group_name": "scorekeep.log",
+#                           "log_stream_name": "scorekeep.log",
+#                           "timezone": "Local"
+#                         }
+#                       ]
+#                     }
+#                   },
+#                   "log_stream_name": "scorekeep",
+#                   "force_flush_interval" : 15
+#                 }
+#               }
+#       restart-amazon-cloudwatch-agent:
+#         commands:
+#           01_stop_service:
+#             command: /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a stop
+#           02_start_service:
+#             command: /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+        install_deps:
+          packages:
+            yum:
+              java-1.8.0-amazon-corretto-devel: []
+              nginx: []
+#              amazon-cloudwatch-agent: []
+          files:
+            "/etc/nginx/conf.d/scorekeep.conf":
+              content: !Sub |
+                map $http_upgrade $connection_upgrade {
+                  default     'upgrade';
+                }
+                server {
+                  listen        80 default_server;
+                  root /home/ec2-user/java-scorekeep/public;
+
+                  location / {
+                  }
+
+                  location /api {
+                    proxy_pass          http://127.0.0.1:8080;
+                    proxy_http_version  1.1;
+
+                    proxy_set_header    Connection          $connection_upgrade;
+                    proxy_set_header    Upgrade             $http_upgrade;
+                    proxy_set_header    Host                $host;
+                    proxy_set_header    X-Real-IP           $remote_addr;
+                    proxy_set_header    X-Forwarded-For     $proxy_add_x_forwarded_for;
+                  }
+
+                  access_log    /var/log/nginx/scorekeep.log main;
+
+                  client_header_timeout 60;
+                  client_body_timeout   60;
+                  keepalive_timeout     60;
+                  gzip                  off;
+                  gzip_comp_level       4;
+
+                }
+          commands:
+            01_start_nginx:
+              command: "service nginx restart"
+            02_download_xray:
+              command: curl https://s3.us-east-2.amazonaws.com/aws-xray-assets.us-east-2/xray-daemon/aws-xray-daemon-3.x.rpm -o /home/ec2-user/xray.rpm
+            03_install_xray:
+              command: yum install -y /home/ec2-user/xray.rpm
+            04_delete_xray_package:
+              command: rm /home/ec2-user/xray.rpm
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    Properties:
+      InstanceType: !Ref InstanceType
+      SecurityGroups:
+        - !Ref InstanceSecurityGroup
+      ImageId: !Ref LatestAmiId
+      IamInstanceProfile: !Ref ec2InstanceProfile
+      UserData: !Base64
+        Fn::Sub: |
+          #!/bin/bash
+
+          yum update -y aws-cfn-bootstrap
+          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource EC2Instance --configsets app_install --region ${AWS::Region}
+
+          touch /etc/profile.d/load_env.sh
+            
+          echo "export ACCOUNT_ID=${AWS::AccountId}" >> /etc/profile.d/load_env.sh
+          echo "export AWS_DEFAULT_REGION=${AWS::Region}" >> /etc/profile.d/load_env.sh
+          echo "export NOTIFICATION_TOPIC=${notificationTopic}" >> /etc/profile.d/load_env.sh
+          echo "export NOTIFICATION_EMAIL=${emailAddress}" >> /etc/profile.d/load_env.sh
+          echo "export USER_TABLE=${userTable}" >> /etc/profile.d/load_env.sh
+          echo "export SESSION_TABLE=${sessionTable}" >> /etc/profile.d/load_env.sh
+          echo "export GAME_TABLE=${gameTable}" >> /etc/profile.d/load_env.sh
+          echo "export MOVE_TABLE=${moveTable}" >> /etc/profile.d/load_env.sh
+          echo "export STATE_TABLE=${stateTable}" >> /etc/profile.d/load_env.sh
+          echo "export RDS_HOSTNAME=${MyDB.Endpoint.Address}" >> /etc/profile.d/load_env.sh
+          echo "export RDS_PORT=${MyDB.Endpoint.Port}" >> /etc/profile.d/load_env.sh
+          echo "export RDS_USERNAME=${DBUsername}" >> /etc/profile.d/load_env.sh
+          echo "export RDS_PASSWORD=${DBPassword}" >> /etc/profile.d/load_env.sh
+
+
+          cd /home/ec2-user/
+
+          curl https://insiders-guide-observability-on-aws-book.s3.amazonaws.com/chapter-04/java-scorekeep-src.zip -o /home/ec2-user/java-scorekeep-src.zip
+          unzip java-scorekeep-src.zip
+          rm java-scorekeep-src.zip
+          
+          cd java-scorekeep/
+          
+          ./gradlew build && \
+          chown -R ec2-user:ec2-user /home/ec2-user/java-scorekeep && \
+          chmod -R o+x /home/ec2-user/ && \
+          chmod -R o+r /home/ec2-user/java-scorekeep/public
+
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource EC2Instance --region ${AWS::Region}
+
+          su - ec2-user -c "nohup java -jar -Dspring.profiles.active=pgsql /home/ec2-user/java-scorekeep/build/libs/scorekeep-api-1.0.0.jar > /tmp/scorekeep.log"
+  InstanceSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enable HTTP access via port 80
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: !Ref SGLocation
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref SGLocation
+  ec2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref ec2Role
+  ec2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: resources
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: ServiceAccess
+                Action:
+                  - '*'
+                Effect: Allow
+                Resource:
+                  - 'arn:aws:dynamodb:*:*:table/scorekeep-*'
+                  - 'arn:aws:sns:*:*:scorekeep-*'
+        - PolicyName: metrics
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: MetricsAccess
+                Action:
+                  - 'cloudwatch:PutMetricData'
+                Effect: Allow
+                Resource: '*'
+        - PolicyName: invoke
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: InvokeFunction
+                Action:
+                  - 'lambda:InvokeFunction'
+                Effect: Allow
+                Resource:
+                  - !GetAtt RandomNameFunction.Arn
+      Path: /
+  notificationTopic:
+    Type: AWS::SNS::Topic
+  userTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      KeySchema:
+        HashKeyElement: {AttributeName: id, AttributeType: S}
+      ProvisionedThroughput: {ReadCapacityUnits: 2, WriteCapacityUnits: 2}
+  sessionTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      KeySchema:
+        HashKeyElement: {AttributeName: id, AttributeType: S}
+      ProvisionedThroughput: {ReadCapacityUnits: 2, WriteCapacityUnits: 2}
+  gameTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "id"
+          AttributeType: "S"
+        - AttributeName: "session"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "id"
+          KeyType: "HASH"
+      GlobalSecondaryIndexes:
+        - IndexName: "session-index"
+          KeySchema:
+            - AttributeName: "session"
+              KeyType: "HASH"
+          ProvisionedThroughput: {ReadCapacityUnits: 2, WriteCapacityUnits: 2}
+          Projection: { ProjectionType: ALL }
+      ProvisionedThroughput: {ReadCapacityUnits: 2, WriteCapacityUnits: 2}
+  moveTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "id"
+          AttributeType: "S"
+        - AttributeName: "game"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "id"
+          KeyType: "HASH"
+      GlobalSecondaryIndexes:
+        - IndexName: "game-index"
+          KeySchema:
+            - AttributeName: "game"
+              KeyType: "HASH"
+          ProvisionedThroughput: {ReadCapacityUnits: 2, WriteCapacityUnits: 2}
+          Projection: { ProjectionType: ALL }
+      ProvisionedThroughput: {ReadCapacityUnits: 2, WriteCapacityUnits: 2}
+  stateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "id"
+          AttributeType: "S"
+        - AttributeName: "game"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "id"
+          KeyType: "HASH"
+      GlobalSecondaryIndexes:
+        - IndexName: "game-index"
+          KeySchema:
+            - AttributeName: "game"
+              KeyType: "HASH"
+          ProvisionedThroughput: {ReadCapacityUnits: 2, WriteCapacityUnits: 2}
+          Projection: { ProjectionType: ALL }
+      ProvisionedThroughput: {ReadCapacityUnits: 2, WriteCapacityUnits: 2}
+  ResourceGroup:
+    Type: AWS::ResourceGroups::Group
+    Properties:
+      Name: my_resource_group
+Outputs:
+  InstanceId:
+    Description: InstanceId of the newly created EC2 instance
+    Value: !Ref EC2Instance
+  AZ:
+    Description: Availability Zone of the newly created EC2 instance
+    Value: !GetAtt 
+      - EC2Instance
+      - AvailabilityZone
+  PublicDNS:
+    Description: Public DNSName of the newly created EC2 instance
+    Value: !GetAtt 
+      - EC2Instance
+      - PublicDnsName
+  PublicIP:
+    Description: Public IP address of the newly created EC2 instance
+    Value: !GetAtt 
+      - EC2Instance
+      - PublicIp

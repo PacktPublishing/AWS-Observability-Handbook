@@ -1,0 +1,17 @@
+{
+  "name": "random-name",
+  "version": "1.0.0",
+  "description": "Name generator",
+  "main": "index.js",
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "eb-java-scorekeep"
+  },
+  "author": "mwunderl",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "chance": "^1.0.4",
+    "aws-xray-sdk-core": "2.4.0"
+  }
+}

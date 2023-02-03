@@ -1,0 +1,44 @@
+AWSTemplateFormatVersion: 2010-09-09
+Resources:
+  ECSInfraStack:
+    Type: 'AWS::CloudFormation::Stack'
+    Properties:
+      TemplateURL: >-
+        https://insiders-guide-observability-on-aws-book.s3.amazonaws.com/common/aws-ecs-infra.yaml
+      Parameters:
+        ALBWorkloads: aws-otel-flask-app
+        AppName: aws-otel-flask-app
+        NATWorkloads: 'true'
+        EnvironmentName: test
+        ServiceDiscoveryEndpoint: test.aws-otel-flask-app.local
+        ToolsAccountPrincipalARN: !Sub arn:aws:iam::${AWS::AccountId}:root
+  OTELFlaskAppStack:
+    Type: 'AWS::CloudFormation::Stack'
+    Properties:
+      TemplateURL: >-
+        https://insiders-guide-observability-on-aws-book.s3.amazonaws.com/common/aws-ecs-otel-flask-application.yaml
+      Parameters:
+        AppName: aws-otel-flask-app
+        ContainerImage: public.ecr.aws/j6y3u3p7/aws-otel-flask-application:latest
+        ContainerPort: 5000
+        EnvName: test
+        LogRetention: 30
+        RulePath: '/'
+        Stickiness: false
+        TargetContainer: aws-otel-flask-app
+        TargetPort: 5000
+        TaskCPU: 512
+        TaskCount: 1
+        TaskMemory: 1024
+        WorkloadName: aws-otel-flask-app
+        HTTPListenerArn: !GetAtt ECSInfraStack.Outputs.HTTPListenerArn
+        ClusterId: !GetAtt ECSInfraStack.Outputs.ClusterId
+        PublicSubnets: !GetAtt ECSInfraStack.Outputs.PublicSubnets
+        ServiceDiscoveryNamespaceID: !GetAtt ECSInfraStack.Outputs.ServiceDiscoveryNamespaceID
+        EnvironmentSecurityGroup: !GetAtt ECSInfraStack.Outputs.EnvironmentSecurityGroup
+        VpcId: !GetAtt ECSInfraStack.Outputs.VpcId
+        OTELCollectorConfig: '--config=/etc/ecs/container-insights/otel-task-metrics-config.yaml'
+
+Outputs:
+  PublicLoadBalancerDNSName:
+    Value: !GetAtt ECSInfraStack.Outputs.PublicLoadBalancerDNSName
