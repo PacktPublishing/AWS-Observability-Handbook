@@ -1,5 +1,5 @@
 # Instructions
-- CloudFormation template `chapter-11/traceanalytics/cf-templates/root_stack.json` needs rest of the resources in this repository.
+- CloudFormation template `chapter-11/traceanalytics/cf-templates/ossdeploy.json` needs rest of the resources in this repository.
 - Launch it either in CloudFormation designer or console.
 - You will need a key pair to the account you are launching this workshop in.
 - On successful completion goto CloudFormation console > Stack name> Outputs
