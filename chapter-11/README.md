@@ -1,5 +1,5 @@
 # Instructions
-- CloudFormation template `chapter11/cf-templates/root_stack.json` needs rest of the resources in this repository.
+- CloudFormation template `chapter-11/traceanalytics/cf-templates/root_stack.json` needs rest of the resources in this repository.
 - Launch it either in CloudFormation designer or console.
 - You will need a key pair to the account you are launching this workshop in.
 - On successful completion goto CloudFormation console > Stack name> Outputs
@@ -10,4 +10,4 @@
 - Goto Trace Analytics app in OpenSearch Dashboard sidebar, explore options
 - Create index pattern called sample_app_logs under Stack Management in the sidebar and observe logs as they come in
 # Architecture
-![architecture](/chapter11/assets/arch.png)
+![architecture](/chapter-11/traceanalytics/assets/arch.png)
