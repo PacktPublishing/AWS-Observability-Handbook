@@ -159,15 +159,12 @@ DEFAULT_VPC_ID=$(aws ec2 describe-vpcs \
     --filters Name=is-default,Values=true \
     --query "Vpcs[*].VpcId" --output text)
     
-if [ -z ${DEFAULT_VPC_ID+x} ]; then
-    aws ec2 create-default-vpc
+if ! DEFAULT_VPC_ID=$(aws ec2 describe-vpcs --query "Vpcs[?IsDefault].VpcId" --output text); then
+    DEFAULT_VPC_ID=$(aws ec2 create-default-vpc --query "Vpc.VpcId" --output text)
 fi
 
 if ! $(aws ecs list-services --cluster o11y-on-aws --query "serviceArns[*]" --output text | grep -w -q o11y-on-aws-firelens); then
     echo "ECS service not found, creating..."
-    DEFAULT_VPC_ID=$(aws ec2 describe-vpcs \
-        --filters Name=is-default,Values=true \
-        --query "Vpcs[*].VpcId" --output text)
 
     DEFAULT_SUBNET_IDS=$(aws ec2 describe-subnets \
         --filters Name=default-for-az,Values=true \
