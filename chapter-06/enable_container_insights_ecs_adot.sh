@@ -94,53 +94,61 @@ echo "Using AWSOpenTelemetryTaskExecutionRole with ARN: $TASK_EXEC_ROLE_ARN"
 
 AWS_REGION=`curl http://169.254.169.254/latest/meta-data/placement/region`
 
-if ! ECS_TASK_DEFINITION_ARN=$(aws ecs list-task-definitions --family-prefix firelens-example-cloudwatch --query "taskDefinitionArns[-1]" --output text); then
+ECS_TASK_DEFINITION_ARN=$(aws ecs list-task-definitions --family-prefix adot-example-containerinsights --query "taskDefinitionArns[-1]" --output text)
+
+if [ "$ECS_TASK_DEFINITION_ARN" = "None" ]; then
     echo "ECS task definition not found, creating..."
     read -r -d '' ECS_TASK_DEFINITION <<EOF
     {
-        "family": "firelens-example-cloudwatch",
-        "networkMode": "awsvpc",
-        "requiresCompatibilities": [
-            "FARGATE"
-        ],
-        "cpu": "512",
-        "memory": "1024",
-        "containerDefinitions": [
-            {
-                "essential": true,
-                "image": "906394416424.dkr.ecr.us-west-2.amazonaws.com/aws-for-fluent-bit:latest",
-                "name": "log_router",
-                "firelensConfiguration": {
-                    "type": "fluentbit"
-                },
-                "logConfiguration": {
-                    "logDriver": "awslogs",
-                    "options": {
-                        "awslogs-group": "firelens-container",
-                        "awslogs-region": "eu-central-1",
-                        "awslogs-create-group": "true",
-                        "awslogs-stream-prefix": "firelens"
-                    }
+    "family": "adot-example-containerinsights",
+    "networkMode": "awsvpc",
+    "requiresCompatibilities": [
+        "FARGATE"
+    ],
+    "cpu": "512",
+    "memory": "1024",
+    "containerDefinitions": [
+        {
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/aws-otel-EC2",
+                    "awslogs-region": "$AWS_REGION",
+                    "awslogs-stream-prefix": "ecs",
+                    "awslogs-create-group": "True"
                 }
             },
-            {
-                "essential": true,
-                "image": "httpd",
-                "name": "app",
-                "logConfiguration": {
-                    "logDriver": "awsfirelens",
-                    "options": {
-                        "Name": "cloudwatch",
-                        "region": "eu-central-1",
-                        "log_group_name": "firelens-blog",
-                        "auto_create_group": "true",
-                        "log_stream_prefix": "from-fluent-bit",
-                        "log-driver-buffer-limit": "2097152"
-                    }
+            "portMappings": [
+                {
+                    "hostPort": 2000,
+                    "protocol": "udp",
+                    "containerPort": 2000
+                },
+                {
+                    "hostPort": 4317,
+                    "protocol": "tcp",
+                    "containerPort": 4317
+                },
+                {
+                    "hostPort": 8125,
+                    "protocol": "udp",
+                    "containerPort": 8125
                 }
-            }
-        ]
-    }
+            ],
+            "environment": [
+                {
+                    "name": "AWS_REGION",
+                    "value": "$AWS_REGION"
+                }
+            ],
+            "command": [
+                "--config=/etc/ecs/container-insights/otel-task-metrics-config.yaml"
+            ],
+            "image": "amazon/aws-otel-collector",
+            "name": "aws-otel-collector"
+        }
+    ]
+}
 EOF
 
     echo "${ECS_TASK_DEFINITION}" > TaskDefinition.json
@@ -155,16 +163,12 @@ fi
 
 echo "Using ECS task definition with ARN: $ECS_TASK_DEFINITION_ARN"
 
-DEFAULT_VPC_ID=$(aws ec2 describe-vpcs \
-    --filters Name=is-default,Values=true \
-    --query "Vpcs[*].VpcId" --output text)
-    
-if ! DEFAULT_VPC_ID=$(aws ec2 describe-vpcs --query "Vpcs[?IsDefault].VpcId" --output text); then
-    DEFAULT_VPC_ID=$(aws ec2 create-default-vpc --query "Vpc.VpcId" --output text)
-fi
-
-if ! $(aws ecs list-services --cluster o11y-on-aws --query "serviceArns[*]" --output text | grep -w -q o11y-on-aws-firelens); then
+if ! $(aws ecs list-services --cluster o11y-on-aws --query "serviceArns[*]" --output text | grep -w -q o11y-on-aws-adot); then
     echo "ECS service not found, creating..."
+
+    if ! DEFAULT_VPC_ID=$(aws ec2 describe-vpcs --query "Vpcs[?IsDefault].VpcId" --output text); then
+        DEFAULT_VPC_ID=$(aws ec2 create-default-vpc --query "Vpc.VpcId" --output text)
+    fi
 
     DEFAULT_SUBNET_IDS=$(aws ec2 describe-subnets \
         --filters Name=default-for-az,Values=true \
@@ -176,7 +180,7 @@ if ! $(aws ecs list-services --cluster o11y-on-aws --query "serviceArns[*]" --ou
 
     aws ecs create-service \
         --cluster o11y-on-aws \
-        --service-name o11y-on-aws-firelens \
+        --service-name o11y-on-aws-adot \
         --task-definition $ECS_TASK_DEFINITION_ARN \
         --desired-count 1 \
         --launch-type "FARGATE" \
@@ -186,5 +190,5 @@ if ! $(aws ecs list-services --cluster o11y-on-aws --query "serviceArns[*]" --ou
 
 fi
 
-echo "Created ECS service named o11y-on-aws-firelens"
+echo "Created ECS service named o11y-on-aws-adot"
 
