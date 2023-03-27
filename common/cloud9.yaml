@@ -592,7 +592,7 @@ Resources:
                 fi
               fi
               echo '=== Install aws-cdk ==='
-              sudo -H -u ec2-user bash -c "npm install -g aws-cdk@2.25.0"
+              sudo -H -u ec2-user bash -c "npm install -g aws-cdk@2.70.0"
               echo '=== Install kubectl ==='
               sudo curl --silent --location -o /usr/local/bin/kubectl https://s3.us-west-2.amazonaws.com/amazon-eks/1.23.13/2022-10-31/bin/linux/amd64/kubectl
               sudo chmod +x /usr/local/bin/kubectl
