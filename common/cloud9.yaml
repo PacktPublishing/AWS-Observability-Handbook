@@ -244,7 +244,7 @@ Resources:
             - ./aws/install
             - aws --version
             - echo '=== Resizing the Instance volume'
-            - !Sub SIZE=${C9InstanceVolumeSize}
+            - !Sub SIZE=${ExampleC9InstanceVolumeSize}
             - !Sub REGION=${AWS::Region}
             - |
               INSTANCEID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
