@@ -238,7 +238,7 @@ Resources:
             - PATH=$PATH:/usr/bin
             - alternatives --set python /usr/bin/python3.8
             - echo '=== INSTALL and CONFIGURE default software components ==='
-            - sudo -H -u ec2-user bash -c "pip3 install boto3 --user"
+            - pip3 install boto3
             - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
             - unzip awscliv2.zip
             - ./aws/install
