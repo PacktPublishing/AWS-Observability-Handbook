@@ -10,4 +10,4 @@
 - Goto Trace Analytics app in OpenSearch Dashboard sidebar, explore options
 - Create index pattern called sample_app_logs under Stack Management in the sidebar and observe logs as they come in
 # Architecture
-![architecture](/chapter11/traceanalytics/assets/arch.png)
+![architecture](/Chapter11/traceanalytics/assets/arch.png)
